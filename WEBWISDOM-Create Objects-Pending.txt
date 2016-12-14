@@ -1,0 +1,123 @@
+USE [WEBWISDOM]
+GO
+/****** Object:  StoredProcedure [dbo].[spGetJobListForDLPM]    Script Date: 12/13/2016 22:41:47 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[spGetJobListForDLPM]
+	@UserID int
+AS
+BEGIN
+
+If @UserID = 3 
+BEGIN
+	SELECT JS.JobNO As [Select], b.[Name] As StoreName, B.StoreNo, JS.JobNo, JS.JobDateTime, JS.OfficeNoOfRecord 
+	FROM sqlwhro.WISE.dbo.tblJobSchedule JS
+		  LEFT JOIN sqlwhro.WISE.dbo.tblbranch b on b.branchid = JS.branchid
+	WHERE   storeNo  IN (SELECT StoreNo COLLATE SQL_Latin1_General_CP1_CI_AS FROM tblrentaldlpmstorelink) 
+		AND softwareID = 7880 
+		AND js.jobdatetime > GETDATE() - 4 AND  jobdatetime < GETDATE() + 7
+		AND JS.jobno NOT in (Select jobno from tblRentalJobStatus)
+		AND CHARINDEX('APPAREL', b.[Name]) = 0
+		AND JS.JobStatus Not In ('X','Y')
+END
+ELSE
+BEGIN
+	SELECT JS.JobNO As [Select], b.[Name] As StoreName, B.StoreNo, JS.JobNo, JS.JobDateTime, JS.OfficeNoOfRecord 
+	FROM sqlwhro.WISE.dbo.tblJobSchedule JS
+		  LEFT JOIN sqlwhro.WISE.dbo.tblbranch b on b.branchid = JS.branchid
+	WHERE   storeNo  IN (SELECT StoreNo COLLATE SQL_Latin1_General_CP1_CI_AS FROM tblrentaldlpmstorelink WHERE userid = @UserID AND Deleted = 0) 
+		AND softwareID = 7880 AND js.jobdatetime > GETDATE() - 4 AND  jobdatetime < GETDATE() + 7
+		AND JS.jobno NOT in (Select jobno from tblRentalJobStatus)
+		AND CHARINDEX('APPAREL', b.[Name]) = 0
+		AND JS.JobStatus Not In ('X','Y')
+END
+
+END
+GO
+/****** Object:  StoredProcedure [dbo].[spGetJobListForAdmin]    Script Date: 12/13/2016 22:41:47 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[spGetJobListForAdmin]
+AS
+BEGIN
+ SELECT JS.JobNo As Job_No, isnull(RJS.Status,0) As Confirmed, b.softwareid As Software_ID, 
+		b.includeid As Include_ID, b.[Name] As StoreName, B.StoreNo, JS.JobDateTime,  DLPM.email As Phone_No, UI.UserName As Email, JN.Notes
+ FROM sqlwhro.WISE.dbo.tblJobSchedule JS
+ LEFT JOIN sqlwhro.WISE.dbo.tblbranch b on b.branchid = JS.branchid
+ LEFT JOIN tblRentalJobStatus RJS ON RJS.JobNo = JS.JobNo
+ LEFT JOIN tblrentaldlpmstorelink  DLPM ON DLPM.StoreNo COLLATE SQL_Latin1_General_CP1_CI_AS = b.storeno
+ LEFT JOIN tblUserInfo UI ON UI.LoginID = DLPM.UserID 
+ LEFT JOIN tblRentalJobNotes JN on JN.JobNo = JS.JobNo
+ LEFT JOIN webpages_Membership MBRSHP ON MBRSHP.UserID = DLPM.UserID
+	WHERE   b.storeNo  IN (SELECT StoreNo COLLATE SQL_Latin1_General_CP1_CI_AS FROM tblrentaldlpmstorelink where deleted=0) 
+		AND softwareID = 7880 
+		AND DLPM.Deleted = 0
+		AND js.jobdatetime > GETDATE() - 4 AND  jobdatetime < GETDATE() + 14
+--		AND JS.jobno NOT in (Select jobno from tblRentalJobStatus)
+		AND CHARINDEX('APPAREL', b.[Name]) = 0
+		AND MBRSHP.IsConfirmed = 1
+		AND JS.JobStatus Not In ('X','Y')
+END
+GO
+/****** Object:  StoredProcedure [dbo].[spGetRentalID]    Script Date: 12/13/2016 22:41:47 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[spGetRentalID]
+	@JobNo int
+AS
+BEGIN
+ IF EXISTS (SELECT RentalID from tblRentalJobInfo where JobNo = @JobNo)
+	SELECT RentalID from tblRentalJobInfo where JobNo = @JobNo
+ ELSE
+ BEGIN
+    INSERT INTO tblRentalJobInfo (JobNo,JobDateTime,CustNo, OfficeNo, MOR, MOREmail, DateReceived, SoftwareID,SoftwareVer, StoreNo, StoreName)
+    (SELECT JS.JobNo, JS.JobDateTime, C.CustNo, B.AssignedOffice, b.Contact, b.Contact, Getdate(), b.SoftwareID, b.SoftwareID, b.StoreNo, B.[Name] 
+		FROM sqlwhro.WISE.dbo.tblJobSchedule JS LEFT JOIN sqlwhro.WISE.dbo.tblBranch B on B.Branchid = JS.branchID 
+		LEFT JOIN sqlwhro.WISE.dbo.tblCustomer C on C.CustID = b.CustID
+     WHERE JobNo = @JobNo)
+	SELECT RentalID from tblRentalJobInfo where JobNo = @JobNo
+ END
+END
+GO
+/****** Object:  StoredProcedure [dbo].[spGetNextTaskAFPSPosting]    Script Date: 12/13/2016 22:41:47 ******/
+/****** Object:  StoredProcedure [dbo].[spUpdateRentalJobStaus]    Script Date: 12/13/2016 22:41:47 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[spUpdateRentalJobStaus]
+	@JobNo int,
+	@LoginID int
+AS
+BEGIN
+DECLARE @RentalID int
+DECLARE @Notify varchar(50)
+DECLARE @Subj varchar(50)
+	
+	SET @Notify = (SELECT UserName from tblUserInfo where LoginID = @LoginID)
+	--'tpooni@wisintl.com'
+	SET @RentalID = (SELECT RentalID from tblRentalJobInfo where JobNo = @JobNo)
+
+	IF EXISTS (SELECT RentalID from tblRentalTagRange where RentalID = @RentalID)
+	BEGIN
+		IF NOT EXISTS(SELECT JobNo FRom tblRentalJobStatus WHERE JobNo = @JobNo)
+		BEGIN
+			INSERT INTO tblRentalJobStatus (JobNo,RentalID,LoginID, [Status],Notify) VALUES (@JobNo,@RentalID, @LoginID, 1,@Notify)
+			SET @Subj = CAST(@JobNo AS char(8)) + 'Is Confirmed'
+			EXEC msdb..sp_send_dbmail
+				@profile_name='SQLSYS',
+				@recipients='KMcCutcheon@wisintl.com;toim@wisintl.com',
+				@subject=@Subj
+			SELECT 1 As RetValue
+		END
+	END
+	ELSE
+ 		SELECT 0 As RetValue
+END
+GO
